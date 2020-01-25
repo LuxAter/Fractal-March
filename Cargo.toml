@@ -13,3 +13,4 @@ clap = "*"
 rayon = "*"
 indicatif = {version = "*", features = ["with_rayon"]}
 scarlet = "*"
+ndarray = "*"

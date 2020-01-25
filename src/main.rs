@@ -2,16 +2,18 @@
 extern crate clap;
 extern crate image;
 extern crate indicatif;
+extern crate ndarray;
 extern crate num;
 extern crate rayon;
 
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
-use num::complex;
+use num::complex::*;
 use rayon::prelude::*;
 use std::ffi::OsStr;
+use std::fs::*;
 use std::path::Path;
 
-const values: [[f32; 3]; 256] = [
+const CMAP_VALUES: [[f32; 3]; 256] = [
     [0.2081f32, 0.1663f32, 0.5292f32],
     [0.2091f32, 0.1721f32, 0.5411f32],
     [0.2101f32, 0.1779f32, 0.5530f32],
@@ -270,42 +272,178 @@ const values: [[f32; 3]; 256] = [
     [0.9763f32, 0.9831f32, 0.0538f32],
 ];
 
-fn load_cmap(map: String) {
-    let mut cmap = std::collections::HashMap::new();
-    cmap.insert("black", [0u8, 0u8, 0u8]);
+fn map(val: u64, input_range: (u64, u64), output_range: Option<(u64, u64)>) -> u64 {
+    let output = output_range.unwrap_or((0u64, 1u64));
+    return (output.0 as f64
+        + ((output.1 - output.0) as f64 / (input_range.1 - input_range.0) as f64)
+            * (val - input_range.0) as f64) as u64;
+}
+fn cmap(val: u64, input_range: (u64, u64)) -> [u8; 3] {
+    // print!("{} -> {}-{}", val, input_range.0, input_range.1);
+    let fval = CMAP_VALUES[map(val, input_range, Some((0u64, 255u64))) as usize];
+    return [
+        (fval[0] * 255f32) as u8,
+        (fval[1] * 255f32) as u8,
+        (fval[2] * 255f32) as u8,
+    ];
 }
 
-fn render_image(
+fn iterate(
+    buffer: &mut std::vec::Vec<std::vec::Vec<u64>>,
+    size: (u32, u32),
+    scale: (f32, f32),
+    v: &Complex32,
+    max_iter: Option<u64>,
+) {
+    for x in 0..size.0 {
+        for y in 0..size.1 {
+            let mut i: u64 = 0;
+            let mut z = Complex32::new(x as f32 * scale.0 - 1.5, y as f32 * scale.1 - 1.5);
+            while i < max_iter.unwrap_or(1000) && z.norm() <= 2.0 {
+                z = z * z + v;
+                i += 1;
+            }
+            buffer[x as usize][y as usize] = i;
+        }
+    }
+}
+
+fn gen_buffer(
+    size: (u32, u32),
+    scale: (f32, f32),
+    v: &Complex32,
+    max_iter: Option<u64>,
+) -> (std::vec::Vec<std::vec::Vec<u64>>, u64) {
+    let mut buffer = vec![vec![0u64; size.1 as usize]; size.0 as usize];
+    iterate(&mut buffer, size, scale, v, max_iter);
+    let mut max_val = 0;
+    for x in 0..size.0 {
+        for y in 0..size.1 {
+            max_val = std::cmp::max(max_val, buffer[x as usize][y as usize]);
+        }
+    }
+    return (buffer, max_val);
+}
+
+fn render_sequence(
+    points: std::vec::Vec<Complex32>,
     path: &Path,
     size: (u32, u32),
     scale: (f32, f32),
-    i: usize,
-    v: &complex::Complex32,
+    max_iter: Option<u64>,
 ) {
-    let out = path
-        .with_file_name(format!(
-            "{:03}-{}",
-            i,
-            path.file_stem()
-                .unwrap_or(OsStr::new("out"))
-                .to_string_lossy()
-        ))
-        .with_extension(path.extension().unwrap_or(OsStr::new("png")));
-    let mut imgbuf = image::ImageBuffer::new(size.0, size.1);
-    for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
-        let r = (0.3 * x as f32) as u8;
-        let b = (0.3 * y as f32) as u8;
-        let cx = x as f32 * scale.0 - 1.5;
-        let cy = y as f32 * scale.1 - 1.5;
-        let mut z = complex::Complex::new(cx, cy);
-        let mut i = 0;
-        while i < 255 && z.norm() <= 2.0 {
-            z = z * z + v;
-            i += 1;
+    let bar1 = ProgressBar::new(points.len() as u64);
+    bar1.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green.bold} [{elapsed_precise}] [{bar:40.cyan/blue.bold}] {pos:4}/{len:7} ({eta})",
+            )
+            .progress_chars("#>-"),
+    );
+    let bar2 = ProgressBar::new(points.len() as u64);
+    bar2.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green.bold} [{elapsed_precise}] [{bar:40.cyan/blue.bold}] {pos:4}/{len:7} ({eta})",
+            )
+            .progress_chars("#>-"),
+    );
+    let buffers: Vec<(Vec<Vec<u64>>, u64)> = points
+        .par_iter()
+        .progress_with(bar1)
+        .map(|v| gen_buffer(size, scale, v, max_iter))
+        .collect();
+    let mut max_steps: u64 = 0;
+    buffers.iter().for_each(|(_buff, max_iters)| {
+        max_steps = std::cmp::max(*max_iters, max_steps);
+    });
+    buffers
+        .par_iter()
+        .enumerate()
+        .progress_with(bar2)
+        .for_each(|(i, (buff, _max_step))| {
+            let mut imgbuf = image::RgbImage::new(size.0, size.1);
+            for x in 0..size.0 {
+                for y in 0..size.1 {
+                    imgbuf.put_pixel(
+                        x,
+                        y,
+                        image::Rgb(cmap(buff[x as usize][y as usize], (0, max_steps))),
+                    );
+                }
+            }
+            let out = path
+                .with_file_name(format!(
+                    "{:03}-{}",
+                    i,
+                    path.file_stem()
+                        .unwrap_or(OsStr::new("out"))
+                        .to_string_lossy()
+                ))
+                .with_extension(path.extension().unwrap_or(OsStr::new("png")));
+            imgbuf.save(out).unwrap();
+        });
+}
+
+fn render_gif(
+    points: Vec<Complex32>,
+    path: &Path,
+    size: (u32, u32),
+    scale: (f32, f32),
+    max_iter: Option<u64>,
+) -> std::io::Result<()> {
+    let bar1 = ProgressBar::new(points.len() as u64);
+    bar1.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green.bold} [{elapsed_precise}] [{bar:40.cyan/blue.bold}] {pos:4}/{len:7} ({eta})",
+            )
+            .progress_chars("#>-"),
+    );
+    let bar2 = ProgressBar::new(points.len() as u64);
+    bar2.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green.bold} [{elapsed_precise}] [{bar:40.cyan/blue.bold}] {pos:4}/{len:7} ({eta})",
+            )
+            .progress_chars("#>-"),
+    );
+    let buffers: Vec<(Vec<Vec<u64>>, u64)> = points
+        .par_iter()
+        .progress_with(bar1)
+        .map(|v| gen_buffer(size, scale, v, max_iter))
+        .collect();
+    let mut max_steps: u64 = 0;
+    buffers.iter().for_each(|(_buff, max_iters)| {
+        max_steps = std::cmp::max(*max_iters, max_steps);
+    });
+    println!("WRITE FILE: {}", path.to_string_lossy());
+    let mut file_out = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(path)
+        .unwrap();
+    let mut encoder = image::gif::Encoder::new(file_out);
+    buffers.iter().for_each(|(buff, _max_iter)| {
+        let mut imgbuf = image::RgbImage::new(size.0, size.1);
+        for x in 0..size.0 {
+            for y in 0..size.1 {
+                imgbuf.put_pixel(
+                    x,
+                    y,
+                    image::Rgb(cmap(buff[x as usize][y as usize], (0, max_steps))),
+                );
+            }
         }
-        *pixel = image::Rgb([r, i as u8, b]);
-    }
-    imgbuf.save(out).unwrap();
+        encoder
+            .encode(&image::gif::Frame::from_rgb(
+                size.0 as u16,
+                size.1 as u16,
+                &imgbuf.into_raw(),
+            ))
+            .unwrap();
+    });
+    Ok(())
 }
 
 fn main() {
@@ -316,7 +454,8 @@ fn main() {
         (@arg imgx: -w --width +takes_value "Set image width")
         (@arg imgy: -h --height +takes_value "Set image height")
         (@arg output: -o --out --output +takes_value "Set output image file")
-        (@arg stop: --stop +takes_value "Stopping complex position")
+        (@arg samples: -s --samples +takes_value "Set the number of samples to take")
+        (@arg iter: -i --iter --iterations +takes_value "Maximum number of iterations")
     )
     .get_matches();
     let scale = (
@@ -349,23 +488,37 @@ fn main() {
     );
     let path = Path::new(opts.value_of("output").unwrap_or("imgs/out.png"));
 
-    let points: Vec<complex::Complex32> = (0..samples)
-        .map(|s| complex::Complex32::from_polar(&0.7885f32, &(step * (s as f32))))
+    let points: Vec<Complex32> = (0..samples)
+        .map(|s| Complex32::from_polar(&0.7885f32, &(step * (s as f32))))
         .collect();
-
-    let bar = ProgressBar::new(points.len() as u64);
-    bar.set_style(
-        ProgressStyle::default_bar()
-            .template(
-                "{spinner:.green.bold} [{elapsed_precise}] [{bar:40.cyan/blue.bold}] {pos:4}/{len:7} ({eta})",
-            )
-            .progress_chars("#>-"),
-    );
-    points
-        .par_iter()
-        .enumerate()
-        .progress_with(bar)
-        .for_each(|(i, v)| {
-            render_image(&path, size, scale, i, v);
-        });
+    if path.extension().unwrap() == "gif" {
+        match render_gif(
+            points,
+            path,
+            size,
+            scale,
+            Some(
+                opts.value_of("iter")
+                    .unwrap_or("5000")
+                    .parse::<u64>()
+                    .unwrap(),
+            ),
+        ) {
+            Ok(v) => println!("Saved FILE {:?}", v),
+            Err(e) => println!("Error: {:?}", e),
+        }
+    } else {
+        render_sequence(
+            points,
+            path,
+            size,
+            scale,
+            Some(
+                opts.value_of("iter")
+                    .unwrap_or("5000")
+                    .parse::<u64>()
+                    .unwrap(),
+            ),
+        );
+    }
 }
