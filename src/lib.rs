@@ -5,8 +5,9 @@ pub use log::{debug, error, info, trace, warn};
 
 pub type Result<T> = std::result::Result<T, String>;
 
-mod scene;
-pub use crate::scene::{Camera, Object, Scene, Transform};
+pub mod identities;
+pub mod spline;
+pub use crate::spline::{Interpolate, InterpolateConstructor};
 
 fn setup_logger() -> std::result::Result<(), fern::InitError> {
     let colors = fern::colors::ColoredLevelConfig::new()

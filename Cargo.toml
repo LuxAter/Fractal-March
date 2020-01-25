@@ -10,3 +10,4 @@ fern = {version = "*", features=["colored"]}
 chrono = "*"
 nalgebra = "*"
 image = "*"
+num = "*"
