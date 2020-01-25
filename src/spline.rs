@@ -48,7 +48,9 @@ where
     pub values: Vec<(f64, T)>,
 }
 interpolate_impl!(LinearInterp<T>);
-impl<T: Add + Mul + Copy + Zero + Mul<f64, Output = T>> Interpolate for LinearInterp<T> {
+impl<T: Add<T, Output = T> + Mul + Copy + Zero + Mul<f64, Output = T>> Interpolate
+    for LinearInterp<T>
+{
     type Value = T;
     fn interp(&self, time: f64) -> Self::Value {
         let mut pos: usize = 0usize;

@@ -1,8 +1,7 @@
-use std::ops::{Add, Mul};
-pub trait Zero: Sized + Add<Self, Output = Self> {
+pub trait Zero: Sized {
     fn zero() -> Self;
 }
-pub trait One: Sized + Mul<Self, Output = Self> {
+pub trait One: Sized {
     fn one() -> Self;
 }
 
@@ -39,6 +38,8 @@ zero_impl!(i32, 0i32);
 zero_impl!(i64, 0i64);
 zero_impl!(f32, 0.0f32);
 zero_impl!(f64, 0.0f64);
+zero_impl!(na::Point3<f64>, na::Point3::<f64>::new(0.0, 0.0, 0.0));
+zero_impl!(na::Vector3<f64>, na::Vector3::<f64>::new(0.0, 0.0, 0.0));
 
 one_impl!(usize, 1usize);
 one_impl!(u8, 1u8);
