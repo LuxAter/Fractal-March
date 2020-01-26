@@ -8,7 +8,6 @@ edition = "2018"
 log = "*"
 fern = {version = "*", features=["colored"]}
 chrono = "*"
-nalgebra = "*"
 image = "*"
 typed-builder = "*"
 rayon = "*"

@@ -3,7 +3,5 @@ extern crate raymarch;
 use raymarch::*;
 
 fn main() {
-    let mut objs: Vec<Box<dyn Sdf + Sync>> = Vec::new();
-    objs.push(Box::new(object::Sphere::new(1.0f64)));
-    raymarch::render(raymarch::RenderArgs::builder().objects(objs).build()).unwrap();
+    let vec1 = algebra::Vector3::new(1.0, 2.0, 3.0);
 }
